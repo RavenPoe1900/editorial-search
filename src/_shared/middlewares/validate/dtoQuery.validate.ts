@@ -1,24 +1,21 @@
-const Joi = require("joi");
+import { Request, Response, NextFunction } from "express";
+import Joi from "joi";
 
-function validateQueryDto(schema) {
-  return async (req, res, next) => {
-    // Validación sincrónica con Joi
+function validateQueryDto<T extends object>(schema: Joi.ObjectSchema<T>) {
+  return async (req: Request, res: Response, next: NextFunction) => {
     const { error: joiError, value } = schema.validate(req.query, {
       abortEarly: false,
       allowUnknown: false,
-    }); // `abortEarly: false` para capturar todos los errores
+    });
 
-    // Si hay errores de Joi, los acumulamos
-    let errors = joiError ? joiError.details.map((err) => err.message) : [];
+    const errors = joiError ? joiError.details.map((err) => err.message) : [];
 
-    // Si hay errores, los retornamos
     if (errors.length > 0) {
       return res.status(400).json({ errors });
     }
-    req.query = value;
-    // Si no hay errores, continuamos con la solicitud
+    req.query = value as any;
     next();
   };
 }
 
-module.exports = validateQueryDto;
+export default validateQueryDto;

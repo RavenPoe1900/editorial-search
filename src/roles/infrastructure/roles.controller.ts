@@ -1,32 +1,33 @@
-const RoleService = require("../application/role.service");
+import { Request, Response } from "express";
+import RoleService from "../application/role.service";
 
-exports.createRole = async (req, res) => {
-  const result = await RoleService.create(req.body);
+export const createRole = async (req: Request, res: Response) => {
+  const result = await RoleService.create(req.body as any);
   res.status(result.status).json(result);
 };
 
-exports.getAllRoles = async (req, res) => {
-  const { page, limit, filter } = req.query;
-  const result = await RoleService.findAll(page, limit, filter);
+export const getAllRoles = async (req: Request, res: Response) => {
+  const { page, limit, filter } = req.query as any;
+  const result = await RoleService.findAll(page, limit, filter as any);
   res.status(result.status).json(result);
 };
 
-exports.getRoleById = async (req, res) => {
+export const getRoleById = async (req: Request, res: Response) => {
   const result = await RoleService.findById(req.params.id);
   res.status(result.status).json(result);
 };
 
-exports.updateRole = async (req, res) => {
-  const result = await RoleService.updateById(req.params.id, req.body);
+export const updateRole = async (req: Request, res: Response) => {
+  const result = await RoleService.updateById(req.params.id, req.body as any);
   res.status(result.status).json(result);
 };
 
-exports.softDeleteRole = async (req, res) => {
+export const softDeleteRole = async (req: Request, res: Response) => {
   const result = await RoleService.softDeleteById(req.params.id);
   res.status(result.status).json(result);
 };
 
-exports.deleteRole = async (req, res) => {
+export const deleteRole = async (req: Request, res: Response) => {
   const result = await RoleService.deleteById(req.params.id);
   res.status(result.status).json(result);
 };

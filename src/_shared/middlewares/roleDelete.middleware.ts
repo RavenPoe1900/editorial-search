@@ -1,9 +1,10 @@
-const UserService = require("../../users/application/user.service");
+import { Request, Response, NextFunction } from "express";
+import UserService from "../../users/application/user.service";
 
-module.exports = async (req, res, next) => {
+export default async (req: Request, res: Response, next: NextFunction) => {
   const roleId = req.params.id;
   try {
-    const userRes = await UserService.findOneByCriteria({ role: roleId });
+    const userRes = await UserService.findOneByCriteria({ role: roleId } as any);
 
     if (userRes && userRes.status === 200 && userRes.data) {
       return res.status(400).json({

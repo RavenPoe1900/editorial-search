@@ -1,14 +1,8 @@
 import { Request, Response, NextFunction } from "express";
-import Joi from "joi";
 
-const idSchema = Joi.string().length(24).hex().required();
-
-function validateId(req: Request, res: Response, next: NextFunction) {
-  const { error } = idSchema.validate(req.params.id);
-  if (error) {
-    return res.status(400).json({ errors: error.details.map((err) => err.message) });
+export default (err: any, _req: Request, res: Response, next: NextFunction) => {
+  if (err instanceof SyntaxError && (err as any).status === 400 && "body" in err) {
+    return res.status(400).json({ error: "Invalid JSON syntax" });
   }
   next();
-}
-
-export default validateId;
+};
