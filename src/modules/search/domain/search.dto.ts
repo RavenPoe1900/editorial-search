@@ -1,15 +1,20 @@
 /**
- * @fileoverview Joi validation schema for the search endpoint's query parameters.
+ * @fileoverview Joi schema for validating search endpoint query parameters.
+ * This schema ensures that pagination constraints and query presence are enforced before
+ * hitting the application service layer.
  */
 
 import Joi from "joi";
 
 /**
- * @const searchQueryDto
- * @description Defines the validation schema for the product search query.
- * @property {string} q - The search term. Required, min 2 characters.
- * @property {number} page - The page number for pagination. Optional, defaults to 0.
- * @property {number} limit - The number of results per page. Optional, defaults to 10.
+ * @constant searchQueryDto
+ * @description Validation schema for query parameters:
+ *  - q: required, trimmed, minimum length 2.
+ *  - page: non-negative integer, defaults to 0.
+ *  - limit: positive integer, capped to prevent excessive result size, defaults to 10.
+ *
+ * NOTE:
+ * Business logic (e.g., deep pagination guard) is enforced later in the service.
  */
 export const searchQueryDto = Joi.object({
   q: Joi.string().trim().min(2).required().messages({

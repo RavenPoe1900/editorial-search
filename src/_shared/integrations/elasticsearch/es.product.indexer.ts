@@ -1,6 +1,15 @@
 /**
- * @fileoverview Contains the logic for interacting with the products index in Elasticsearch.
- * It provides functions to create/update (upsert) and delete product documents.
+ * @fileoverview Elasticsearch product index interaction utilities.
+ * Provides two upsert strategies:
+ *  1. ID-based (fetch from API A via GraphQL).
+ *  2. Snapshot-based (direct indexing from event-provided data).
+ *
+ * Also supports deletion (idempotent).
+ *
+ * DESIGN TRADEOFF:
+ * The fetch-based approach introduces cross-service coupling and latency,
+ * but keeps events lightweight. Snapshot-based events reduce coupling and
+ * can accelerate indexing. Both are supported to allow migration.
  */
 
 import axios from "axios";
@@ -13,7 +22,7 @@ const INDEX = config.ELASTICSEARCH_PRODUCT_INDEX;
 
 /**
  * @interface GraphQLResponse
- * @description A generic type for a GraphQL response containing a product.
+ * @description Minimal typed shape expected from API A's GraphQL endpoint for indexing projection.
  */
 interface GraphQLResponse {
   data?: {
@@ -24,12 +33,13 @@ interface GraphQLResponse {
 
 /**
  * @function fetchProductFromApiA
- * @description Fetches the complete data for a product from API A using GraphQL.
- * NOTE: This approach creates a coupling between services. In more advanced architectures,
- * the event from RabbitMQ should contain all necessary data (Event-Carried State Transfer pattern).
- * @param {string} productId - The ID of the product to fetch.
- * @returns {Promise<ProductDocument | null>} The product data ready for indexing, or null if not found.
- * @throws {Error} If the request to API A fails or returns GraphQL errors.
+ * @description Retrieves the latest product projection for indexing.
+ * @param productId Product identifier used to fetch from API A.
+ * @returns ProductDocument or null if not found.
+ * @throws Error if GraphQL returns errors or network fails.
+ *
+ * NOTE:
+ * A service-to-service authentication header should be added for production environments.
  */
 async function fetchProductFromApiA(productId: string): Promise<ProductDocument | null> {
   const graphqlQuery = {
@@ -39,6 +49,11 @@ async function fetchProductFromApiA(productId: string): Promise<ProductDocument 
           gtin
           name
           brand
+          manufacturer
+          netWeight {
+            value
+            unit
+          }
           description
           status
           updatedAt
@@ -49,17 +64,19 @@ async function fetchProductFromApiA(productId: string): Promise<ProductDocument 
   };
 
   try {
-    const response = await axios.post<GraphQLResponse>(config.API_A_URL, graphqlQuery, {
-      // NOTE: A service-to-service authentication token should be included here.
-      // headers: { 'Authorization': `Bearer ${SERVICE_AUTH_TOKEN}` }
-    });
+    const response = await axios.post<GraphQLResponse>(
+      config.API_A_URL,
+      graphqlQuery,
+      {
+        timeout: 5000, // Defensive network timeout.
+      }
+    );
 
     if (response.data.errors) {
-      throw new Error(`GraphQL error: ${JSON.stringify(response.data.errors)}`);
+      throw new Error(`GraphQL errors: ${JSON.stringify(response.data.errors)}`);
     }
-    
-    return response.data.data?.product ?? null;
 
+    return response.data.data?.product ?? null;
   } catch (error: any) {
     logger(`Failed to fetch product ${productId} from API A: ${error.message}`, "INDEXER", "red");
     throw error;
@@ -68,42 +85,59 @@ async function fetchProductFromApiA(productId: string): Promise<ProductDocument 
 
 /**
  * @function upsertProductById
- * @description Fetches a product by its ID from API A and then indexes/updates it in Elasticsearch.
- * @param {string} productId - The ID of the product to create or update.
- * @returns {Promise<void>}
- * @throws Will re-throw errors from fetching or indexing to be handled by the event consumer.
+ * @description Fetches remote product data then indexes it.
+ * @param productId Product identifier.
  */
 export async function upsertProductById(productId: string): Promise<void> {
   try {
     const productData = await fetchProductFromApiA(productId);
     if (!productData) {
-      logger(`Product ${productId} not found in API A, skipping upsert.`, "INDEXER", "yellow");
-      // Optional: Consider deleting the product from ES if it no longer exists in the source of truth.
-      // await deleteProduct(productId);
+      logger(`Product ${productId} not found in API A - skipping upsert.`, "INDEXER", "yellow");
       return;
     }
-
-    const es = getES();
-    await es.index({
-      index: INDEX,
-      id: productId, // Use the MongoDB ID as the document ID in Elasticsearch
-      document: productData,
-      refresh: "wait_for", // Wait for the document to be visible for searches
-    });
-
-    logger(`[Elasticsearch] Upserted product ${productId}`, "INDEXER", "green");
+    await indexDocument(productId, productData);
   } catch (err: any) {
-    logger(`[Elasticsearch] Upsert by ID error for product ${productId}: ${err.message}`, "INDEXER", "red");
+    logger(`Upsert (fetch) failed for ${productId}: ${err.message}`, "INDEXER", "red");
     throw err;
   }
 }
 
 /**
+ * @function upsertProductSnapshot
+ * @description Directly indexes the provided snapshot (from enriched events).
+ * @param productId Product identifier (document ID in ES).
+ * @param snapshot Full product projection.
+ */
+export async function upsertProductSnapshot(productId: string, snapshot: ProductDocument): Promise<void> {
+  try {
+    await indexDocument(productId, snapshot);
+  } catch (err: any) {
+    logger(`Upsert (snapshot) failed for ${productId}: ${err.message}`, "INDEXER", "red");
+    throw err;
+  }
+}
+
+/**
+ * @function indexDocument
+ * @description Internal helper performing the actual ES indexing operation.
+ * @param productId Document ID in ES (mirrors upstream ID).
+ * @param doc Product document to index.
+ */
+async function indexDocument(productId: string, doc: ProductDocument): Promise<void> {
+  const es = getES();
+  await es.index({
+    index: INDEX,
+    id: productId,
+    document: doc,
+    refresh: "wait_for", // Ensures visibility in subsequent search queries.
+  });
+  logger(`Indexed product ${productId}`, "INDEXER", "green");
+}
+
+/**
  * @function deleteProduct
- * @description Deletes a product from the Elasticsearch index.
- * @param {string} id - The ID of the product to delete.
- * @returns {Promise<void>}
- * @throws Will re-throw errors if the deletion fails for reasons other than 'not found'.
+ * @description Removes a product document from the index (idempotent).
+ * @param id Product identifier.
  */
 export async function deleteProduct(id: string): Promise<void> {
   try {
@@ -113,13 +147,13 @@ export async function deleteProduct(id: string): Promise<void> {
       id: String(id),
       refresh: "wait_for",
     });
-    logger(`[Elasticsearch] Deleted product ${id}`, "INDEXER", "green");
+    logger(`Deleted product ${id}`, "INDEXER", "green");
   } catch (err: any) {
-    // If the document does not exist (404), it's not an error; the operation is idempotent.
     if (err?.meta?.statusCode === 404) {
-      logger(`[Elasticsearch] Product ${id} to delete was not found. Operation is idempotent.`, "INDEXER", "yellow");
+      // Safe to ignore: already absent.
+      logger(`Product ${id} not found at delete (idempotent).`, "INDEXER", "yellow");
     } else {
-      logger(`[Elasticsearch] Delete error for product ${id}: ${err.message}`, "INDEXER", "red");
+      logger(`Delete failed for ${id}: ${err.message}`, "INDEXER", "red");
       throw err;
     }
   }

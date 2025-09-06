@@ -1,13 +1,19 @@
 /**
- * @fileoverview The controller for handling HTTP requests to the search endpoint.
+ * @fileoverview HTTP controller for the search endpoint.
+ * Its responsibilities:
+ *  - Interpret already-validated query parameters.
+ *  - Invoke the application service.
+ *  - Normalize the service layer result into an HTTP-friendly shape.
+ *  - Handle error propagation consistently.
+ *
+ * DESIGN CHOICE:
+ * Controller remains "thin"—no business logic here. All domain-specific logic
+ * lives inside SearchService to simplify future testing and reuse.
  */
 
 import { Request, Response } from "express";
 import SearchService from "../application/search.service";
 import type { ServiceResult } from "../../../_shared/service/base.service.types";
-
-// --- FIX ---
-// Type imports now correctly point to the `domain/search.types.ts` file.
 import type {
   SearchApiRequestQuery,
   ProductSearchHit,
@@ -16,32 +22,33 @@ import type {
 
 /**
  * @function searchProducts
- * @description An Express controller to handle product search requests.
- * It validates input, calls the search service, and formats the response for the client.
- * @param {Request} req - The Express request object.
- * @param {Response} res - The Express response object.
- * @returns {Promise<void>}
+ * @description Handles GET /api/search. Assumes prior validation middleware has ensured
+ *              correct shape and defaults for query params.
+ * @param req Express request object.
+ * @param res Express response object.
  */
 export const searchProducts = async (req: Request, res: Response): Promise<void> => {
-  // The query parameters have already been validated and typed by middleware.
+  // Values are already sanitized and defaulted by Joi-based middleware.
   const { q, page, limit } = req.query as unknown as SearchApiRequestQuery;
 
-  const result: ServiceResult<SearchServiceResponse> = await SearchService.searchProducts(q, page, limit);
+  const result: ServiceResult<SearchServiceResponse> =
+    await SearchService.searchProducts(q, page, limit);
 
+  // Standard error branch (400, 500, etc.)
   if (result.status >= 400 || !result.data) {
     res.status(result.status).json({
       error: { message: result.error || "An unknown error occurred." },
     });
     return;
   }
-  
-  // Type guard to ensure `result.data` is not an array, which `ServiceResult` allows.
+
+  // Defensive: If the service contract changes unexpectedly to array.
   if (Array.isArray(result.data)) {
     res.status(500).json({ error: { message: "Unexpected response format from search service." } });
     return;
   }
 
-  // Format the response to be user-friendly.
+  // Response normalization: flatten _source into each item and include score.
   const response = {
     data: result.data.hits.map((hit: ProductSearchHit) => ({
       id: hit._id,

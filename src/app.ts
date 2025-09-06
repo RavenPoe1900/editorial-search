@@ -1,8 +1,20 @@
 /**
- * @fileoverview The main entry point for the application.
- * This file configures the Express server, initializes middleware, sets up routes,
- * manages connections to external services (Elasticsearch, RabbitMQ),
- * and starts the server.
+ * @fileoverview Main application bootstrap for the Search API (API B).
+ * Responsibilities:
+ *  - Configure global middleware (CORS, JSON parsing, etc.)
+ *  - Initialize critical external dependencies before accepting traffic.
+ *  - Mount health probes early for environment readiness checks.
+ *  - Register feature routes & Swagger documentation.
+ *  - Manage graceful shutdown to avoid abrupt connection termination.
+ *
+ * STARTUP ORDER:
+ *  1. Create Express app
+ *  2. Register core middleware (JSON, CORS, parsers)
+ *  3. Mount health endpoints (fast, independent of full readiness)
+ *  4. Initialize dependencies (Elasticsearch + RabbitMQ)
+ *  5. Mount feature routes and Swagger
+ *  6. Start HTTP server
+ *  7. Register signal handlers (SIGINT / SIGTERM)
  */
 
 import express, { Express } from "express";
@@ -15,13 +27,14 @@ import errorHandler from "./_shared/middlewares/errorHandle.middleware";
 import jsonSyntaxErrorHandler from "./_shared/middlewares/validate/json.validate";
 import setupSwagger from "./_shared/swagger/setup.swagger";
 import setupRoutes from "./_shared/root/setup.root";
+import healthRoutes from "./_shared/root/health.routes";
 import { ensureESConnectivity } from "./_shared/integrations/elasticsearch/es.client";
 import { startConsumer, stopConsumer } from "./modules/event-consumer/application/event-consumer.service";
 
 const app: Express = express();
 const port = config.PORT;
 
-// --- Essential Middleware Setup ---
+// --- Core Middleware (order matters: parsers before routes) ---
 app.use(cookieParser());
 app.use(cors({
   origin: config.CORS_ORIGIN,
@@ -29,14 +42,15 @@ app.use(cors({
 }));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
-app.use(jsonSyntaxErrorHandler); // Custom middleware for JSON syntax errors
+app.use(jsonSyntaxErrorHandler); // Specialized JSON parse error handler (returns 400 for malformed JSON).
+
+// --- Fast-path Probes (do not depend on full readiness) ---
+app.use("/api", healthRoutes);
 
 /**
  * @function initializeDependencies
- * @description Ensures connectivity to all external services before starting the application.
- * It attempts to connect to Elasticsearch and start the RabbitMQ consumer, with retry logic.
- * If any essential connection fails after all retries, the application will not start.
- * @throws {Error} If it fails to connect to an essential service.
+ * @description Establishes connections to external services required for functional readiness.
+ * Fails fast if dependencies cannot be reached within configured retry budget.
  */
 async function initializeDependencies(): Promise<void> {
   logger("Initializing external dependencies...", "BOOTSTRAP", "cyan");
@@ -44,44 +58,37 @@ async function initializeDependencies(): Promise<void> {
     retries: config.STARTUP_RETRIES,
     delayMs: config.STARTUP_RETRY_DELAY_MS,
   });
-  await startConsumer(); // The RabbitMQ consumer includes its own retry logic.
+  await startConsumer(); // RabbitMQ consumer manages its own reconnection.
   logger("All dependencies initialized successfully.", "BOOTSTRAP", "green");
 }
 
 /**
  * @function main
- * @description The main function that orchestrates the application startup.
+ * @description Orchestrates application startup lifecycle.
  */
 async function main(): Promise<void> {
   try {
-    // 1. Connect to external services
     await initializeDependencies();
 
-    // 2. Set up application routes and Swagger documentation
+    // Mount feature routes + Swagger only after dependencies are ready.
     setupRoutes(app);
     setupSwagger(app, port);
 
-    // 3. Set up the global error handler (must be the last middleware)
+    // Global error handler must be registered last (captures downstream errors).
     app.use(errorHandler);
 
-    // 4. Start the server to accept HTTP requests
     const server = app.listen(port, () => {
-      logger(`Server is running at http://localhost:${port}`, "SERVER", "magenta");
-      logger(`API documentation available at http://localhost:${port}/api-docs`, "SERVER", "magenta");
+      logger(`Server running at http://localhost:${port}`, "SERVER", "magenta");
+      logger(`Docs available at http://localhost:${port}/api-docs`, "SERVER", "magenta");
     });
 
-    // --- Graceful Shutdown Management ---
-    const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
-    signals.forEach((signal) => {
+    // Graceful termination: ensures indexing / consumer shuts down cleanly.
+    ["SIGINT", "SIGTERM"].forEach((signal) => {
       process.on(signal, async () => {
         logger(`Received ${signal}. Shutting down gracefully...`, "SERVER", "yellow");
-        
         server.close(async () => {
           logger("HTTP server closed.", "SERVER", "yellow");
-          
-          // Stop the RabbitMQ consumer
           await stopConsumer();
-          
           process.exit(0);
         });
       });
@@ -93,7 +100,7 @@ async function main(): Promise<void> {
   }
 }
 
-// Start the application
+// Start async bootstrap (no top-level await for broader Node compatibility).
 main();
 
 export default app;

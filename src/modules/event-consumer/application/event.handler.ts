@@ -1,52 +1,90 @@
 /**
- * @fileoverview This file contains the core business logic for handling product events.
- * It acts as a dispatcher, calling the appropriate indexer function based on the event's routing key.
+ * @fileoverview Dispatcher for product-related events consumed from the message broker.
+ * Decides which Elasticsearch indexing action to perform based on routing key + payload shape.
+ *
+ * SUPPORTED KEYS:
+ *  - product.created
+ *  - product.updated
+ *  - product.approved
+ *  - product.deleted
+ *
+ * DUAL MODE:
+ *  - ID-only events trigger a fetch from API A (upsertProductById).
+ *  - Snapshot events (with 'snapshot') index directly (upsertProductSnapshot).
  */
 
-import { upsertProductById, deleteProduct } from "../../../_shared/integrations/elasticsearch/es.product.indexer";
+import {
+  upsertProductById,
+  upsertProductSnapshot,
+  deleteProduct
+} from "../../../_shared/integrations/elasticsearch/es.product.indexer";
 import { logger } from "../../../_shared/utils/logger";
-import { isProductEvent } from "../domain/event.type";
+import {
+  AnyProductEvent,
+  hasSnapshot,
+  isProductEvent
+} from "../domain/event.types";
 
 /**
  * @function handleProductEvent
- * @description Processes a deserialized event message from RabbitMQ.
- * It determines which action to take in Elasticsearch based on the `routingKey`.
- * @param {string} routingKey - The routing key of the message (e.g., "product.created").
- * @param {unknown} payload - The message content, parsed from JSON.
- * @returns {Promise<void>}
- * @throws {Error} Throws an error if processing fails, which allows the caller to nack the message.
+ * @description Core handler invoked by the RabbitMQ consumer for each product lifecycle event.
+ * @param routingKey Topic-style routing key (e.g., "product.updated").
+ * @param payload Raw (unknown) payload parsed from message content.
+ * @throws Re-throws errors so the caller can nack appropriately (enabling retries or DLQ strategy).
  */
 export const handleProductEvent = async (routingKey: string, payload: unknown): Promise<void> => {
+  // --- Shape Validation ---
   if (!isProductEvent(payload)) {
-    logger(`Received invalid event payload for routing key ${routingKey}: ${JSON.stringify(payload)}`, "EVENT_HANDLER", "red");
-    throw new Error("Invalid event payload structure.");
+    logger(
+      `Rejected event with invalid payload shape for routingKey='${routingKey}'`,
+      "EVENT_HANDLER",
+      "red"
+    );
+    throw new Error("Invalid product event payload.");
   }
 
-  logger(`Handling event: ${routingKey} for productId: ${payload.productId}`, "EVENT_HANDLER", "cyan");
+  // At this point TypeScript knows payload is AnyProductEvent.
+  const eventPayload: AnyProductEvent = payload;
+
+  logger(
+    `Handling event '${routingKey}' for productId=${eventPayload.productId}${hasSnapshot(eventPayload) ? " (snapshot present)" : ""}`,
+    "EVENT_HANDLER",
+    "cyan"
+  );
 
   try {
     switch (routingKey) {
       case "product.created":
       case "product.updated":
       case "product.approved":
-        // For all these events, the action is to (re)index the product.
-        // The indexer service will fetch the latest data from API A.
-        await upsertProductById(payload.productId);
+        if (hasSnapshot(eventPayload)) {
+          // Snapshot path: index directly (no network hop to API A).
+          await upsertProductSnapshot(eventPayload.productId, eventPayload.snapshot);
+        } else {
+          // Legacy path: fetch latest state from API A (GraphQL).
+          await upsertProductById(eventPayload.productId);
+        }
         break;
 
       case "product.deleted":
-        // If a product is deleted, we remove it from the search index.
-        await deleteProduct(payload.productId);
+        await deleteProduct(eventPayload.productId);
         break;
 
       default:
-        logger(`Unknown routing key, ignoring event: ${routingKey}`, "EVENT_HANDLER", "yellow");
-        // We don't throw an error here, as it's not a processing failure.
-        // We simply acknowledge and discard the message.
+        // Unknown routing keys are acknowledged silently (no retry).
+        logger(
+          `Unknown routing key '${routingKey}' - acknowledged without action.`,
+          "EVENT_HANDLER",
+          "yellow"
+        );
     }
-  } catch (error: any) {
-    logger(`Error handling event ${routingKey} for productId ${payload.productId}: ${error.message}`, "EVENT_HANDLER", "red");
-    // Re-throw the error to ensure the message is nacked by the consumer service.
-    throw error;
+  } catch (err: any) {
+    logger(
+      `Error processing '${routingKey}' for productId=${eventPayload.productId}: ${err.message}`,
+      "EVENT_HANDLER",
+      "red"
+    );
+    // Propagate error to let the consumer decide (nack, requeue, DLQ, etc.).
+    throw err;
   }
 };

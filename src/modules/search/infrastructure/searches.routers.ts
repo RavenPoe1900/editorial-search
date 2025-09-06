@@ -1,5 +1,8 @@
 /**
- * @fileoverview Defines the router for the /search endpoint.
+ * @fileoverview Router for the product search endpoint.
+ * Wires middleware chain: authentication -> validation -> controller.
+ * Authentication is currently enforced; if public access is desired,
+ * you can remove the authenticationMiddleware from the chain.
  */
 
 import express from "express";
@@ -14,12 +17,11 @@ const router = express.Router();
  * @swagger
  * /api/search:
  *   get:
- *     summary: Search for products
+ *     summary: Full-text product search
  *     tags: [Search]
  *     description: >
- *       Performs a full-text search for products based on a query string.
- *       The search is performed on the 'name', 'brand', and 'description' fields.
- *       Results are paginated.
+ *       Executes a multi-field full-text search across name, brand, manufacturer, and description.
+ *       Returns only products with status PUBLISHED. Supports pagination.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -28,70 +30,35 @@ const router = express.Router();
  *         required: true
  *         schema:
  *           type: string
- *           example: "organic coffee"
- *         description: The search term. Minimum 2 characters.
+ *           example: "organic"
+ *         description: Search text (minimum 2 characters).
  *       - in: query
  *         name: page
  *         schema:
  *           type: integer
- *           default: 0
  *           minimum: 0
- *         description: The page number for pagination (0-indexed).
+ *           default: 0
+ *         description: Zero-based page index.
  *       - in: query
  *         name: limit
  *         schema:
  *           type: integer
- *           default: 10
  *           minimum: 1
  *           maximum: 100
- *         description: The number of results per page.
+ *           default: 10
+ *         description: Page size.
  *     responses:
  *       '200':
- *         description: A paginated list of products matching the search query.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 data:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       id:
- *                         type: string
- *                         example: "60d0fe4f5311236168a109ca"
- *                       score:
- *                         type: number
- *                         example: 12.345
- *                       name:
- *                         type: string
- *                         example: "Organic Fair-Trade Coffee"
- *                       brand:
- *                         type: string
- *                         example: "EcoBean"
- *                 pagination:
- *                   type: object
- *                   properties:
- *                     total:
- *                       type: integer
- *                       example: 1
- *                     page:
- *                       type: integer
- *                       example: 0
- *                     limit:
- *                       type: integer
- *                       example: 10
- *                     totalPages:
- *                       type: integer
- *                       example: 1
+ *         description: Paginated list of search results.
  *       '400':
- *         description: Bad Request. Invalid or missing query parameters.
+ *         description: Invalid query params or deep pagination exceeded.
  *       '401':
- *         description: Unauthorized. A valid JWT token is required.
+ *         description: Unauthorized (missing/invalid token).
+ *       '500':
+ *         description: Internal server error during search execution.
  */
 router.get(
-  "/", // The base path is `/search`, so this becomes `/api/search`
+  "/",
   authenticationMiddleware,
   validateQueryDto(searchQueryDto),
   searchProducts
