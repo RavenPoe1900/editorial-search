@@ -1,23 +1,28 @@
+/**
+ * @fileoverview Configures and sets up Swagger (OpenAPI) documentation.
+ */
+
 import swaggerJsdoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
 import path from "path";
-import findRoutes from "../service/findRote.service";
 import { Express } from "express";
 
-const routes = findRoutes(path.resolve(__dirname, "../../"), "domain", ".swagger.ts");
-
-function setupSwagger(app: Express, port: number) {
+/**
+ * @function setupSwagger
+ * @description Initializes and mounts the Swagger UI middleware.
+ * @param {Express} app - The Express application instance.
+ * @param {number} port - The port the application is running on.
+ */
+function setupSwagger(app: Express, port: number): void {
   const swaggerDefinition = {
     openapi: "3.0.0",
     info: {
-      title: "My API",
+      title: "Editorial Search API",
       version: "1.0.0",
-      description: "API documentation",
+      description: "API for searching products and managing the search index.",
     },
     servers: [
-      { url: `http://localhost:${port}`, description: "Development" },
-      { url: "https://staging.api.example.com", description: "Staging" },
-      { url: "https://api.example.com", description: "Production" },
+      { url: `http://localhost:${port}`, description: "Development Server" },
     ],
     components: {
       securitySchemes: {
@@ -25,45 +30,31 @@ function setupSwagger(app: Express, port: number) {
           type: "http",
           scheme: "bearer",
           bearerFormat: "JWT",
-          description: "Usar: Bearer <access_token>",
-        },
-        refreshCookieAuth: {
-          type: "apiKey",
-          in: "cookie",
-          name: "refreshToken",
-          description:
-            "Refresh token enviado vía cookie HttpOnly llamada `refreshToken`. Swagger no puede crear cookies HttpOnly; ver descripción del endpoint.",
+          description: "Enter 'Bearer <token>'",
         },
       },
     },
     tags: [
-      { name: "Auth", description: "Autenticación y gestión de tokens" },
-      { name: "Users", description: "Usuarios y perfiles" },
-      { name: "Health", description: "Health checks y estado del sistema" },
+      { name: "Search", description: "Endpoints for querying products" },
+      { name: "Health", description: "System health checks" },
     ],
   };
 
   const swaggerOptions = {
     swaggerDefinition,
-    apis: routes,
+    // Path to the API docs, now looking for `.router.ts` files in infrastructure folders
+    apis: [path.resolve(__dirname, "../../modules/**/*.router.ts")],
   };
 
-  const specs = swaggerJsdoc(swaggerOptions as any);
+  const swaggerSpecs = swaggerJsdoc(swaggerOptions);
 
-  const swaggerUiOptions = {
+  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpecs, {
+    customSiteTitle: "Search API Docs",
     swaggerOptions: {
       persistAuthorization: true,
       displayRequestDuration: true,
-      docExpansion: "none",
-      requestInterceptor: (req: any) => {
-        req.credentials = "include";
-        return req;
-      },
-    },
-    customSiteTitle: "My API Docs",
-  };
-
-  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs, swaggerUiOptions as any));
+    }
+  }));
 }
 
 export default setupSwagger;
