@@ -28,7 +28,7 @@ import jsonSyntaxErrorHandler from "./_shared/middlewares/validate/json.validate
 import setupSwagger from "./_shared/swagger/setup.swagger";
 import setupRoutes from "./_shared/root/setup.root";
 import healthRoutes from "./_shared/root/health.routes";
-import { ensureESConnectivity } from "./_shared/integrations/elasticsearch/es.client";
+import { ensureESConnectivity, closeES } from "./_shared/integrations/elasticsearch/es.client";
 import { startConsumer, stopConsumer } from "./modules/event-consumer/application/event-consumer.service";
 
 const app: Express = express();
@@ -70,11 +70,9 @@ async function main(): Promise<void> {
   try {
     await initializeDependencies();
 
-    // Mount feature routes + Swagger only after dependencies are ready.
     setupRoutes(app);
     setupSwagger(app, port);
 
-    // Global error handler must be registered last (captures downstream errors).
     app.use(errorHandler);
 
     const server = app.listen(port, () => {
@@ -82,15 +80,20 @@ async function main(): Promise<void> {
       logger(`Docs available at http://localhost:${port}/api-docs`, "SERVER", "magenta");
     });
 
-    // Graceful termination: ensures indexing / consumer shuts down cleanly.
     ["SIGINT", "SIGTERM"].forEach((signal) => {
       process.on(signal, async () => {
         logger(`Received ${signal}. Shutting down gracefully...`, "SERVER", "yellow");
         server.close(async () => {
           logger("HTTP server closed.", "SERVER", "yellow");
           await stopConsumer();
+          await closeES();
           process.exit(0);
         });
+        // Safety timeout (force exit if hanging)
+        setTimeout(() => {
+          logger("Forced shutdown after timeout.", "SERVER", "red");
+          process.exit(1);
+        }, config.SERVER?.gracefulTimeoutMs || 10000).unref();
       });
     });
 
@@ -100,7 +103,6 @@ async function main(): Promise<void> {
   }
 }
 
-// Start async bootstrap (no top-level await for broader Node compatibility).
 main();
 
 export default app;

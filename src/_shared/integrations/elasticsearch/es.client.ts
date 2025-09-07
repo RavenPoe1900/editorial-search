@@ -21,8 +21,9 @@ export function getES(): Client {
   if (!client) {
     logger("Creating new Elasticsearch client instance...", "ES_CLIENT", "cyan");
     client = new Client({
-      node: config.ELASTICSEARCH_URL,
-      // Additional options like authentication, timeouts, etc., would go here.
+      node: config.ELASTICSEARCH_URL, // Legacy usage still valid
+      // NOTE: Optionally could use config.SEARCH.url
+      // node: config.SEARCH.url,
     });
   }
   return client;
@@ -62,9 +63,25 @@ export async function ensureESConnectivity(options: { retries: number; delayMs: 
     }
   }
 
-  // If the loop finishes, all attempts have failed.
   const finalError = new Error(
     `Elasticsearch not available after ${retries} attempts at ${config.ELASTICSEARCH_URL}. Last error: ${lastError?.message || "unknown"}`
   );
   throw finalError;
+}
+
+/**
+ * @function closeES
+ * @description Gracefully closes the singleton client (optional for shutdown hooks).
+ */
+export async function closeES(): Promise<void> {
+  if (client) {
+    try {
+      await client.close();
+      logger("Elasticsearch client closed.", "ES_CLIENT", "yellow");
+    } catch (err: any) {
+      logger(`Error closing Elasticsearch client: ${err.message}`, "ES_CLIENT", "red");
+    } finally {
+      client = undefined;
+    }
+  }
 }

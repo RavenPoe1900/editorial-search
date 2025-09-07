@@ -1,10 +1,8 @@
-# compiled output
+# Nestjs specific
 /dist
 /node_modules
-/upload/*
-!/upload/.gitkeep
-
-package-lock.json
+/build
+/tmp
 
 # Logs
 logs
@@ -14,46 +12,13 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
-yarn.lock   
 
-# OS
-.DS_Store
+# dotenv environment variable files
+.env
+.env.development
+.env.test
+.env.production
 
-#files
-/imageTemplates/*
-/logos/*
-/curriculumProfilePictures/*
-/curriculumPreviewPictures/*
-
-#environment
-#.env
-
-# Tests
-/coverage
-/.nyc_output
-
-# IDEs and editors
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-
-# IDE - VSCode
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-src/applekey/*.p8
-Dockerfilelocal
-tareas_asignadas.txt
-
-#my files
-tareas_asignadas.txt
-tareas_asignadas.txt
-
-#AWS
-docker.env
+# temp directory
+.temp
+.tmp

@@ -33,7 +33,6 @@ import {
  * @throws Re-throws errors so the caller can nack appropriately (enabling retries or DLQ strategy).
  */
 export const handleProductEvent = async (routingKey: string, payload: unknown): Promise<void> => {
-  // --- Shape Validation ---
   if (!isProductEvent(payload)) {
     logger(
       `Rejected event with invalid payload shape for routingKey='${routingKey}'`,
@@ -43,7 +42,6 @@ export const handleProductEvent = async (routingKey: string, payload: unknown): 
     throw new Error("Invalid product event payload.");
   }
 
-  // At this point TypeScript knows payload is AnyProductEvent.
   const eventPayload: AnyProductEvent = payload;
 
   logger(
@@ -58,10 +56,8 @@ export const handleProductEvent = async (routingKey: string, payload: unknown): 
       case "product.updated":
       case "product.approved":
         if (hasSnapshot(eventPayload)) {
-          // Snapshot path: index directly (no network hop to API A).
           await upsertProductSnapshot(eventPayload.productId, eventPayload.snapshot);
         } else {
-          // Legacy path: fetch latest state from API A (GraphQL).
           await upsertProductById(eventPayload.productId);
         }
         break;
@@ -71,7 +67,6 @@ export const handleProductEvent = async (routingKey: string, payload: unknown): 
         break;
 
       default:
-        // Unknown routing keys are acknowledged silently (no retry).
         logger(
           `Unknown routing key '${routingKey}' - acknowledged without action.`,
           "EVENT_HANDLER",
@@ -84,7 +79,6 @@ export const handleProductEvent = async (routingKey: string, payload: unknown): 
       "EVENT_HANDLER",
       "red"
     );
-    // Propagate error to let the consumer decide (nack, requeue, DLQ, etc.).
     throw err;
   }
 };

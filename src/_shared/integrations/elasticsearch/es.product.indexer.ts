@@ -54,7 +54,7 @@ async function fetchProductFromApiA(productId: string): Promise<ProductDocument 
             value
             unit
           }
-          description
+            description
           status
           updatedAt
         }
@@ -150,7 +150,6 @@ export async function deleteProduct(id: string): Promise<void> {
     logger(`Deleted product ${id}`, "INDEXER", "green");
   } catch (err: any) {
     if (err?.meta?.statusCode === 404) {
-      // Safe to ignore: already absent.
       logger(`Product ${id} not found at delete (idempotent).`, "INDEXER", "yellow");
     } else {
       logger(`Delete failed for ${id}: ${err.message}`, "INDEXER", "red");

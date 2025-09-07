@@ -34,6 +34,21 @@ interface AppConfig {
   readonly API_A_URL: string;
   readonly STARTUP_RETRIES: number;
   readonly STARTUP_RETRY_DELAY_MS: number;
+  // Derived groups (added for structured usage; legacy keys remain):
+  readonly RABBIT: {
+    url: string;
+    exchange: string;
+    searchQueue: string;
+    startupRetries: number;
+    startupDelayMs: number;
+    prefetch: number;
+    reconnectBaseMs: number;
+    reconnectMaxMs: number;
+  };
+  readonly SEARCH: {
+    url: string;
+    productIndex: string;
+  };
 }
 
 // Main configuration object
@@ -58,6 +73,22 @@ const config: AppConfig = {
 
   STARTUP_RETRIES: Number(process.env.STARTUP_RETRIES) || 10,
   STARTUP_RETRY_DELAY_MS: Number(process.env.STARTUP_RETRY_DELAY_MS) || 5000,
+
+  // Derived structured blocks (non-breaking; existing code can still use legacy keys)
+  RABBIT: {
+    url: process.env.RABBITMQ_URL || "amqp://localhost",
+    exchange: process.env.RABBITMQ_EXCHANGE || "products.events",
+    searchQueue: process.env.RABBITMQ_SEARCH_QUEUE || "search_service_queue",
+    startupRetries: Number(process.env.STARTUP_RETRIES) || 10,
+    startupDelayMs: Number(process.env.STARTUP_RETRY_DELAY_MS) || 5000,
+    prefetch: Number(process.env.RABBITMQ_PREFETCH || 10),
+    reconnectBaseMs: Number(process.env.RABBITMQ_RECONNECT_BASE_MS || 2000),
+    reconnectMaxMs: Number(process.env.RABBITMQ_RECONNECT_MAX_MS || 15000),
+  },
+  SEARCH: {
+    url: process.env.ELASTICSEARCH_URL || "http://localhost:9200",
+    productIndex: process.env.ELASTICSEARCH_PRODUCT_INDEX || "products",
+  }
 };
 
 // Make the config object immutable to prevent runtime modifications.

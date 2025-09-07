@@ -5,24 +5,22 @@
  */
 
 import * as amqp from "amqplib";
-import type { Channel, ConsumeMessage } from "amqplib";
+import type { Channel, ConsumeMessage, Connection } from "amqplib";
 import { logger } from "../../../_shared/utils/logger";
 import config from "../../../_shared/config/config";
 import { handleProductEvent } from "./event.handler";
 
-let connection: amqp.Connection | null = null;
+let connection: Connection | null = null;
 let channel: Channel | null = null;
 let isClosing = false;
+let reconnectAttempts = 0;
 
 /**
  * @function assertIsPromiseConnection
  * @description A type guard to ensure the object returned from amqp.connect is a promise-based Connection.
  * @param {unknown} conn - The connection object to check.
  */
-function assertIsPromiseConnection(conn: unknown): asserts conn is amqp.Connection {
-  // --- FIX ---
-  // We use `(conn as any)` to bypass the compile-time check within the type guard itself,
-  // relying on the runtime check for the function's existence.
+function assertIsPromiseConnection(conn: unknown): asserts conn is Connection {
   if (!conn || typeof conn !== "object" || typeof (conn as any).createChannel !== "function") {
     throw new Error("Returned object from amqp.connect does not appear to be a promise-based Connection.");
   }
@@ -41,8 +39,6 @@ export async function stopConsumer(): Promise<void> {
       await channel.close();
       channel = null;
     }
-    // --- FIX ---
-    // We close the connection using a runtime type check to avoid TypeScript's compile-time error.
     if (connection && typeof (connection as any).close === "function") {
       await (connection as any).close();
       connection = null;
@@ -53,6 +49,18 @@ export async function stopConsumer(): Promise<void> {
   } finally {
     isClosing = false;
   }
+}
+
+/**
+ * @function exponentialBackoffDelay
+ * @description Returns a delay time using exponential backoff with jitter.
+ */
+function exponentialBackoffDelay(): number {
+  const base = config.RABBIT?.reconnectBaseMs || 2000;
+  const max = config.RABBIT?.reconnectMaxMs || 15000;
+  const delay = Math.min(max, base * Math.pow(2, reconnectAttempts));
+  const jitter = delay * 0.2 * Math.random();
+  return Math.round(delay + jitter);
 }
 
 /**
@@ -71,6 +79,12 @@ async function establishConnection(): Promise<void> {
   const q = await ch.assertQueue(config.RABBITMQ_SEARCH_QUEUE, { durable: true });
   await ch.bindQueue(q.queue, config.RABBITMQ_EXCHANGE, "product.#");
 
+  // Prefetch if configured (non-breaking: defaults to 0 = unlimited)
+  const prefetch = config.RABBIT?.prefetch;
+  if (prefetch && prefetch > 0) {
+    ch.prefetch(prefetch);
+  }
+
   connection = conn;
   channel = ch;
 
@@ -83,11 +97,14 @@ async function establishConnection(): Promise<void> {
     connection = null;
     channel = null;
     if (!isClosing) {
-      logger("Attempting to reconnect in 5 seconds...", "AMQP_CONSUMER", "yellow");
-      setTimeout(startConsumer, 5000);
+      reconnectAttempts++;
+      const wait = exponentialBackoffDelay();
+      logger(`Attempting to reconnect in ${wait}ms...`, "AMQP_CONSUMER", "yellow");
+      setTimeout(startConsumer, wait);
     }
   });
 
+  reconnectAttempts = 0;
   logger(`Consumer ready. Listening to queue: ${q.queue}`, "AMQP_CONSUMER", "green");
   ch.consume(q.queue, (msg) => handleMessage(msg, ch), { noAck: false });
 }
@@ -146,6 +163,7 @@ function handleMessage(msg: ConsumeMessage | null, ch: Channel): void {
       ch.ack(msg);
     })
     .catch(() => {
+      // NOTE: NACK without requeue to avoid poison message loops.
       ch.nack(msg, false, false);
     });
 }
